@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: dk+.py (Darkkalk+)
-# VERSION: 2026.09.15__21.12.36
+# VERSION: 2026.09.16__10.04.15
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.15__21.12.36"
+APP_VERSION = "2026.09.16__10.04.15"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -211,7 +211,7 @@ class PreferencesDialog(QDialog):
         self.resize(440, 240)
 
         script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "darkcalc+_internal", "icons", "app_basic_icon.svg")
+        icon_path = os.path.join(script_dir, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
@@ -267,27 +267,32 @@ from PyQt6.QtWidgets import QGridLayout
 from PyQt6.QtGui import QFont, QKeySequence, QShortcut
 
 
-class AppBasic(QMainWindow):
+class DarkkalkPlus(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"DarkCalc+ v{APP_VERSION}")
+        QApplication.setCursorFlashTime(0)
+        self.setWindowTitle(f"Darkkalk+ v{APP_VERSION}")
 
         script_dir = os.path.dirname(os.path.realpath(__file__))
-        internal_dir = os.path.join(script_dir, "darkcalc+_internal")
+        internal_dir = os.path.join(script_dir, "darkkalk+_internal")
         os.makedirs(internal_dir, exist_ok=True)
-        self.config_file = os.path.join(internal_dir, "darkcalc+.config.json")
+        self.config_file = os.path.join(internal_dir, "darkkalk+.config.json")
 
-        icon_path = os.path.join(internal_dir, "icons", "app_basic_icon.svg")
+        icon_path = os.path.join(internal_dir, "icons", "darkkalk+_icon.svg")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
         if sys.platform == "win32":
-            myappid = f"pwshAgyjkcrg761.darkcalcplus.{APP_VERSION}"
+            myappid = f"pwshAgyjkcrg761.darkkalkplus.{APP_VERSION}"
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
-        self.default_size = (860, 540)
+        self.default_size = (800, 580)
+        self.setMinimumSize(750, 560)
         self.settings = SettingsWrapper(self.config_file)
         self.load_geometry()
+
+        self.history_file = os.path.join(internal_dir, "darkkalk+.history.json")
+        self.history_data = {"input_history": [], "calculation_history": []}
 
         self.memory_val = 0.0
         self.last_ans = 0.0
@@ -295,6 +300,7 @@ class AppBasic(QMainWindow):
         self.current_theme = self.settings.value("theme", "Dark")
 
         self.init_ui()
+        self.load_history()
         self.apply_theme(self.current_theme)
         self.setup_shortcuts()
 
@@ -312,29 +318,31 @@ class AppBasic(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(10)
 
-        self.lbl_title = QLabel("DarkCalc+")
-        self.lbl_title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        self.lbl_title = QLabel("Darkkalk+")
+        self.lbl_title.setFont(QFont("Verdana", 14, QFont.Weight.Bold))
         left_layout.addWidget(self.lbl_title)
 
         self.txt_history = QTextBrowser()
+        self.txt_history.document().setDocumentMargin(8)
         self.txt_history.setStyleSheet("""
             QTextBrowser {
                 font-family: 'Consolas', 'Segoe UI', monospace;
                 font-size: 14px;
-                border: 1px solid #3c3c3c;
+                border: 2px solid #3c3c3c;
                 border-radius: 4px;
-                padding: 8px;
+                padding: 0px;
             }
         """)
         left_layout.addWidget(self.txt_history, 1)
 
         self.btn_clear_history = QPushButton("Clear History")
         self.btn_clear_history.setMinimumHeight(42)
-        self.btn_clear_history.setStyleSheet("font-size: 13px; font-weight: bold;")
+        self.btn_clear_history.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_history.setStyleSheet("font-family: 'Verdana', 'Segoe UI', sans-serif; font-size: 13px; font-weight: bold;")
         self.btn_clear_history.clicked.connect(self.clear_history)
         left_layout.addWidget(self.btn_clear_history)
 
-        main_layout.addWidget(left_widget, 4)
+        main_layout.addWidget(left_widget, 5)
 
         # ----------------- Right Pane: Calculator & Grid -----------------
         right_widget = QWidget()
@@ -342,23 +350,37 @@ class AppBasic(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(12)
 
+        input_container = QWidget()
+        input_layout = QHBoxLayout(input_container)
+        input_layout.setContentsMargins(0, 0, 0, 0)
+        input_layout.setSpacing(6)
+
         self.txt_display = QLineEdit()
         self.txt_display.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.txt_display.setMinimumHeight(52)
         self.txt_display.setStyleSheet("""
             QLineEdit {
-                font-family: 'Consolas', 'Segoe UI', monospace;
+                font-family: 'Verdana', 'Segoe UI', sans-serif;
                 font-size: 24px;
                 font-weight: bold;
                 color: #4a90e2;
-                border: 1px solid #4e5058;
+                border: 2px solid #4e5058;
                 border-radius: 4px;
                 padding: 4px 12px;
             }
         """)
         self.txt_display.returnPressed.connect(self.calculate_result)
         self.txt_display.installEventFilter(self)
-        right_layout.addWidget(self.txt_display)
+        input_layout.addWidget(self.txt_display, 1)
+
+        self.btn_history_dropdown = QPushButton("▼")
+        self.btn_history_dropdown.setFixedSize(52, 52)
+        self.btn_history_dropdown.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_history_dropdown.setToolTip("Past Inputs")
+        self.btn_history_dropdown.clicked.connect(self.show_input_history_menu)
+        input_layout.addWidget(self.btn_history_dropdown)
+
+        right_layout.addWidget(input_container)
 
         # 5 Columns x 7 Rows Button Grid
         grid_layout = QGridLayout()
@@ -386,7 +408,7 @@ class AppBasic(QMainWindow):
             if not text:
                 continue
             btn = QPushButton(text)
-            btn.setMinimumHeight(44)
+            btn.setMinimumHeight(55)
             btn.clicked.connect(lambda checked, t=text: self.on_button_click(t))
             self.grid_buttons[text] = btn
             grid_layout.addWidget(btn, r, c)
@@ -480,38 +502,45 @@ class AppBasic(QMainWindow):
         date_str = now.strftime("%Y-%m-%d")
         time_str = now.strftime("%H:%M:%S")
 
-        if not res.startswith("Error"):
+        # Save to in-memory history data
+        inputs = self.history_data.setdefault("input_history", [])
+        if expr in inputs:
+            inputs.remove(expr)
+        inputs.append(expr)
+
+        calc_list = self.history_data.setdefault("calculation_history", [])
+        calc_list.append({
+            "date": date_str,
+            "time": time_str,
+            "expression": expr,
+            "result": res
+        })
+        self.save_history()
+
+        is_err = res.startswith("Error")
+        res_color = "#f04747" if is_err else "#4a90e2"
+        if not is_err:
             try:
                 self.last_ans = float(res)
             except Exception:
                 pass
 
-            entry_html = f"""
-            <div style="margin-bottom: 12px; font-family: 'Consolas', 'Segoe UI', monospace;">
-                <div style="color: #8e9297; font-size: 11px; line-height: 1.2;">{date_str}<br>{time_str}</div>
-                <table width="100%" cellpadding="0" cellspacing="0" style="margin-top: 3px;">
-                    <tr>
-                        <td align="left" style="color: #dcddde; font-size: 14px;">{expr}</td>
-                        <td align="right" style="color: #4a90e2; font-size: 15px; font-weight: bold;">{res}</td>
-                    </tr>
-                </table>
-            </div>
-            """
-            self.txt_history.append(entry_html)
+        entry_html = f"""
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 22px; font-family: 'Verdana', 'Segoe UI', sans-serif;">
+            <tr>
+                <td align="left" style="color: #8e9297; font-size: 11px; line-height: 1.2;">{date_str}<br>{time_str}</td>
+            </tr>
+            <tr>
+                <td align="left" style="color: #dcddde; font-size: 14px; padding-top: 4px;">{expr}</td>
+            </tr>
+            <tr>
+                <td align="right" style="color: {res_color}; font-size: 18px; font-weight: bold; padding-top: 2px;">{res}</td>
+            </tr>
+        </table>
+        """
+        self.txt_history.append(entry_html)
+        if not is_err:
             self.txt_display.clear()
-        else:
-            entry_html = f"""
-            <div style="margin-bottom: 12px; font-family: 'Consolas', 'Segoe UI', monospace;">
-                <div style="color: #8e9297; font-size: 11px; line-height: 1.2;">{date_str}<br>{time_str}</div>
-                <table width="100%" cellpadding="0" cellspacing="0" style="margin-top: 3px;">
-                    <tr>
-                        <td align="left" style="color: #dcddde; font-size: 14px;">{expr}</td>
-                        <td align="right" style="color: #f04747; font-size: 14px; font-weight: bold;">{res}</td>
-                    </tr>
-                </table>
-            </div>
-            """
-            self.txt_history.append(entry_html)
 
         sb = self.txt_history.verticalScrollBar()
         if sb:
@@ -529,6 +558,87 @@ class AppBasic(QMainWindow):
 
     def clear_history(self):
         self.txt_history.clear()
+        self.history_data = {"input_history": [], "calculation_history": []}
+        self.save_history()
+
+    def load_history(self):
+        if os.path.exists(self.history_file):
+            try:
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    self.history_data = json.load(f)
+            except Exception:
+                self.history_data = {"input_history": [], "calculation_history": []}
+
+        if not isinstance(self.history_data, dict):
+            self.history_data = {"input_history": [], "calculation_history": []}
+        self.history_data.setdefault("input_history", [])
+        self.history_data.setdefault("calculation_history", [])
+
+        self.txt_history.clear()
+        for item in self.history_data.get("calculation_history", []):
+            date_str = item.get("date", "")
+            time_str = item.get("time", "")
+            expr = item.get("expression", "")
+            res = item.get("result", "")
+            is_err = res.startswith("Error")
+            res_color = "#f04747" if is_err else "#4a90e2"
+            res_size = "16px" if is_err else "18px"
+
+            entry_html = f"""
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 22px; font-family: 'Verdana', 'Segoe UI', sans-serif;">
+                <tr>
+                    <td align="left" style="color: #8e9297; font-size: 11px; line-height: 1.2;">{date_str}<br>{time_str}</td>
+                </tr>
+                <tr>
+                    <td align="left" style="color: #dcddde; font-size: 14px; padding-top: 4px;">{expr}</td>
+                </tr>
+                <tr>
+                    <td align="right" style="color: {res_color}; font-size: {res_size}; font-weight: bold; padding-top: 2px;">{res}</td>
+                </tr>
+            </table>
+            """
+            self.txt_history.append(entry_html)
+
+        sb = self.txt_history.verticalScrollBar()
+        if sb:
+            sb.setValue(sb.maximum())
+
+    def save_history(self):
+        try:
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                json.dump(self.history_data, f, indent=4)
+        except Exception:
+            pass
+
+    def show_input_history_menu(self):
+        import time
+        now = time.time()
+        if now - getattr(self, '_history_menu_closed_time', 0) < 0.25:
+            self.txt_display.setFocus()
+            return
+
+        menu = QMenu(self)
+        menu.aboutToHide.connect(lambda: setattr(self, '_history_menu_closed_time', time.time()))
+
+        inputs = self.history_data.get("input_history", [])
+        if not inputs:
+            for _ in range(6):
+                act = menu.addAction(" ")
+                act.setEnabled(False)
+        else:
+            for item_text in reversed(inputs[-30:]):
+                act = menu.addAction(item_text)
+                act.triggered.connect(lambda checked, t=item_text: self.set_input_from_history(t))
+
+        pos = self.txt_display.mapToGlobal(self.txt_display.rect().bottomLeft())
+        total_width = self.txt_display.width() + self.btn_history_dropdown.width() + 6
+        menu.setMinimumWidth(total_width)
+        menu.exec(pos)
+        self.txt_display.setFocus()
+
+    def set_input_from_history(self, text):
+        self.txt_display.setText(text)
+        self.txt_display.setFocus()
 
     def load_geometry(self):
         self.resize(*self.default_size)
@@ -674,9 +784,10 @@ class AppBasic(QMainWindow):
                     color: #ffffff;
                 }
                 QPushButton {
+                    font-family: 'Verdana', 'Segoe UI', sans-serif;
                     background-color: #2b2d31;
                     color: #ffffff;
-                    border: 1px solid #4e5058;
+                    border: 2px solid #4e5058;
                     border-radius: 4px;
                     font-size: 13px;
                     font-weight: bold;
@@ -684,18 +795,18 @@ class AppBasic(QMainWindow):
                 }
                 QPushButton:hover {
                     background-color: #3b3e45;
-                    border: 1px solid #949ba4;
+                    border: 2px solid #949ba4;
                     color: #ffffff;
                 }
                 QPushButton:pressed {
                     background-color: #007acc;
-                    border: 1px solid #388bfd;
+                    border: 2px solid #388bfd;
                     color: #ffffff;
                 }
                 QLineEdit, QTextBrowser {
                     background-color: #2b2d31;
                     color: #ffffff;
-                    border: 1px solid #4e5058;
+                    border: 2px solid #4e5058;
                     border-radius: 4px;
                 }
             """)
@@ -743,9 +854,10 @@ class AppBasic(QMainWindow):
                     color: #000000;
                 }
                 QPushButton {
+                    font-family: 'Verdana', 'Segoe UI', sans-serif;
                     background-color: #f2f2f2;
                     color: #000000;
-                    border: 1px solid #b0b0b0;
+                    border: 2px solid #b0b0b0;
                     border-radius: 4px;
                     font-size: 13px;
                     font-weight: bold;
@@ -753,18 +865,18 @@ class AppBasic(QMainWindow):
                 }
                 QPushButton:hover {
                     background-color: #e5f1fb;
-                    border: 1px solid #0078d7;
+                    border: 2px solid #0078d7;
                     color: #000000;
                 }
                 QPushButton:pressed {
                     background-color: #0078d7;
-                    border: 1px solid #005499;
+                    border: 2px solid #005499;
                     color: #ffffff;
                 }
                 QLineEdit, QTextBrowser {
                     background-color: #ffffff;
                     color: #000000;
-                    border: 1px solid #b0b0b0;
+                    border: 2px solid #b0b0b0;
                     border-radius: 4px;
                 }
             """)
@@ -781,7 +893,7 @@ class AppBasic(QMainWindow):
         dialog.resize(600, 420)
 
         script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "darkcalc+_internal", "icons", "app_basic_icon.svg")
+        icon_path = os.path.join(script_dir, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
         if os.path.exists(icon_path):
             dialog.setWindowIcon(QIcon(icon_path))
 
@@ -805,7 +917,7 @@ class AppBasic(QMainWindow):
         """)
 
         manual_text = (
-            f"<h1>DarkCalc+ v{APP_VERSION}</h1>"
+            f"<h1>Darkkalk+ v{APP_VERSION}</h1>"
             f"<p>A scientific and arithmetic expression calculator written in Python and PyQt6 under GPLv3.</p>"
             f"<h2>KEYPAD &amp; FUNCTIONS</h2>"
             f"<ul>"
@@ -837,7 +949,7 @@ class AppBasic(QMainWindow):
         dialog.resize(480, 320)
 
         script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "darkcalc+_internal", "icons", "app_basic_icon.svg")
+        icon_path = os.path.join(script_dir, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
         if os.path.exists(icon_path):
             dialog.setWindowIcon(QIcon(icon_path))
 
@@ -858,12 +970,14 @@ class AppBasic(QMainWindow):
         """)
 
         about_text = (
-            f"<h1>DarkCalc+ v{APP_VERSION}</h1>"
+            f"<h1>Darkkalk+ v{APP_VERSION}</h1>"
             "<p>Copyright (C) 2026 <b>pwshAgyjkcrg761</b><br>"
             "Licensed under <b>GPLv3</b></p>"
             "<p>Official License: <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">gnu.org/licenses/gpl-3.0.html</a></p>"
             "<hr>"
-            "<p>Clean-room GPLv3 implementation of DarkCalc+.</p>"
+            "<p><b>Icon Credits:</b><br>"
+            "'<a href=\"https://www.svgrepo.com/svg/253926/calculator\">Calculator SVG Vector</a>' by <a href=\"https://www.svgrepo.com/\">SVGRepo</a>.<br>"
+            "Used under <a href=\"https://creativecommons.org/publicdomain/zero/1.0/\">CC0 License</a>. Modified by pwshAgyjkcrg761.</p>"
         )
         text_browser.setHtml(about_text)
         layout.addWidget(text_browser)
@@ -880,10 +994,10 @@ class AppBasic(QMainWindow):
             sound_disabled = self.settings.value("disable_notification_sounds", False)
 
         script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "darkcalc+_internal", "icons", "app_basic_icon.svg")
+        icon_path = os.path.join(script_dir, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
 
         msg_box = QMessageBox(self if self.isVisible() else None)
-        msg_box.setWindowTitle(f"DarkCalc+ - {title}")
+        msg_box.setWindowTitle(f"Darkkalk+ - {title}")
         msg_box.setText(text)
         msg_box.setStandardButtons(buttons)
         if default_button:
@@ -920,6 +1034,6 @@ class AppBasic(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    window = AppBasic()
+    window = DarkkalkPlus()
     window.show()
     sys.exit(app.exec())
