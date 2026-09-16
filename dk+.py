@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: dk+.py (Darkkalk+)
-# VERSION: 2026.09.16__10.04.15
+# VERSION: 2026.09.16__14.57.48
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,10 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.16__10.04.15"
+if hasattr(sys, "set_int_max_str_digits"):
+    sys.set_int_max_str_digits(0)
+
+APP_VERSION = "2026.09.16__14.57.48"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -100,8 +103,32 @@ def evaluate_math_expression(expr_str, ans_val=0.0, use_degrees=True):
     
     clean_expr = expr_str.strip()
     clean_expr = clean_expr.replace('×', '*').replace('÷', '/').replace('^', '**')
-    clean_expr = re.sub(r'\bAns\b', f"({float(ans_val)})", clean_expr, flags=re.IGNORECASE)
-    clean_expr = re.sub(r'\bpi\b', str(math.pi), clean_expr, flags=re.IGNORECASE)
+
+    # Auto-close unclosed parentheses
+    open_count = clean_expr.count('(')
+    close_count = clean_expr.count(')')
+    if open_count > close_count:
+        clean_expr += ')' * (open_count - close_count)
+
+    # Substitute Ans safely before implicit multiplication
+    ans_repr = str(ans_val).strip() if str(ans_val).strip() else "0"
+    clean_expr = re.sub(r'\bAns\b', f"({ans_repr})", clean_expr, flags=re.IGNORECASE)
+
+    # Implicit multiplication where constants precede numbers, parentheses, or functions (e.g., pi2 -> pi*2, pi(2) -> pi*(2))
+    clean_expr = re.sub(r'\b(pi|e)\s*(\d+(\.\d+)?)', r'\1*\2', clean_expr)
+    clean_expr = re.sub(r'\b(pi|e)\s*\(', r'\1*(', clean_expr)
+    clean_expr = re.sub(r'\b(pi|e)\s*(sin|cos|tan|log|ln|sqrt|pi|e|abs)\b', r'\1*\2', clean_expr)
+
+    # Implicit multiplication where numbers or ')' precede constants or functions (excluding scientific notation 1e5)
+    clean_expr = re.sub(r'(\d+(\.\d+)?|\))\s*(sin|cos|tan|log|ln|sqrt|pi|abs)\b', r'\1*\3', clean_expr)
+    clean_expr = re.sub(r'(\))\s*e\b', r'\1*e', clean_expr)
+
+    # Implicit multiplication with parentheses (e.g., 10(5+5) -> 10*(5+5), (2)(3) -> (2)*(3), (5)2 -> (5)*2)
+    clean_expr = re.sub(r'(\d+(\.\d+)?)\s*\(', r'\1*(', clean_expr)
+    clean_expr = re.sub(r'\)\s*\(', r')*(', clean_expr)
+    clean_expr = re.sub(r'\)\s*(\d+(\.\d+)?)', r')*\1', clean_expr)
+
+    clean_expr = re.sub(r'\bpi\b', str(math.pi), clean_expr)
     clean_expr = re.sub(r'(\d+(\.\d+)?)%', r'(\1/100.0)', clean_expr)
 
     allowed_names = {
@@ -113,7 +140,9 @@ def evaluate_math_expression(expr_str, ans_val=0.0, use_degrees=True):
         "sqrt": lambda x: math.sqrt(x),
         "abs": abs,
         "pi": math.pi,
-        "e": math.e
+        "e": math.e,
+        "inf": float("inf"),
+        "nan": float("nan")
     }
 
     try:
@@ -124,19 +153,54 @@ def evaluate_math_expression(expr_str, ans_val=0.0, use_degrees=True):
 
         result = eval(compiled_code, {"__builtins__": {}}, allowed_names)
         
-        if isinstance(result, float):
-            if result.is_integer():
-                return str(int(result))
-            return f"{result:.10g}"
-        return str(result)
+        if isinstance(result, complex):
+            if abs(result.imag) < 1e-15:
+                result = result.real
+            else:
+                return "Error: Non-real result"
+
+        if isinstance(result, (int, float)):
+            if result == 0:
+                return "0"
+
+            # Format large integers in scientific notation
+            if isinstance(result, int) and abs(result) >= 10**12:
+                try:
+                    f_val = float(result)
+                    if not math.isinf(f_val):
+                        return f"{f_val:.10g}"
+                except OverflowError:
+                    pass
+
+                s = str(abs(result))
+                exp = len(s) - 1
+                mantissa = s[0] + ('.' + s[1:11].rstrip('0') if len(s) > 1 else '')
+                mantissa = mantissa.rstrip('.')
+                sign = "-" if result < 0 else ""
+                return f"{sign}{mantissa}e+{exp}"
+
+            if isinstance(result, float):
+                if math.isinf(result):
+                    return "Error: Overflow (Infinity)"
+                if math.isnan(result):
+                    return "Error: Undefined (NaN)"
+                if result.is_integer() and abs(result) < 10**12:
+                    return str(int(result))
+                return f"{result:.10g}"
+
+            return str(result)
     except ZeroDivisionError:
         return "Error: Division by zero"
+    except OverflowError:
+        return "Error: Number overflow (exceeds float limit ~10^308)"
     except ValueError as ve:
         return f"Error: {ve}"
-    except Exception:
+    except (SyntaxError, NameError, TypeError):
         return "Error: Invalid syntax"
+    except Exception as e:
+        return f"Error: {e}"
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDir, QTimer
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDir, QTimer, QLocale, QDate
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QPushButton, QFileDialog, QLabel, QMessageBox, 
                              QDialog, QCheckBox, QTextBrowser, QDialogButtonBox,
@@ -144,7 +208,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTabWidget, QLineEdit, QFormLayout, QTreeWidget,
                              QTreeWidgetItem, QSplitter, QHeaderView, QMenu,
                              QInputDialog, QTreeView, QAbstractItemView,
-                             QStackedWidget)
+                             QStackedWidget, QRadioButton, QButtonGroup)
 from PyQt6.QtGui import (QActionGroup, QPalette, QColor, QIcon, QPixmap, QPainter, 
                          QPen, QFileSystemModel)
 
@@ -208,7 +272,7 @@ class PreferencesDialog(QDialog):
         super().__init__(parent)
         self.parent_app = parent
         self.setWindowTitle("Preferences")
-        self.resize(440, 240)
+        self.resize(440, 320)
 
         script_dir = os.path.dirname(os.path.realpath(__file__))
         icon_path = os.path.join(script_dir, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
@@ -228,6 +292,30 @@ class PreferencesDialog(QDialog):
         self.combo_angle = QComboBox()
         self.combo_angle.addItems(["Degrees", "Radians"])
         calc_layout.addRow("Trigonometry Angle Mode:", self.combo_angle)
+
+        curr_date = QDate.currentDate()
+        logical_example = curr_date.toString("yyyy-MM-dd")
+        system_example = QLocale.system().toString(curr_date, QLocale.FormatType.ShortFormat)
+
+        dt_group_widget = QWidget()
+        dt_group_layout = QVBoxLayout(dt_group_widget)
+        dt_group_layout.setContentsMargins(0, 0, 0, 0)
+        dt_group_layout.setSpacing(6)
+
+        self.rb_datetime_logical = QRadioButton(f"Logical ({logical_example})")
+        self.rb_datetime_system = QRadioButton(f"System ({system_example})")
+        self.rb_datetime_disabled = QRadioButton("Disabled")
+
+        self.btn_group_datetime = QButtonGroup(self)
+        self.btn_group_datetime.addButton(self.rb_datetime_logical)
+        self.btn_group_datetime.addButton(self.rb_datetime_system)
+        self.btn_group_datetime.addButton(self.rb_datetime_disabled)
+
+        dt_group_layout.addWidget(self.rb_datetime_logical)
+        dt_group_layout.addWidget(self.rb_datetime_system)
+        dt_group_layout.addWidget(self.rb_datetime_disabled)
+
+        calc_layout.addRow("Date && Time Settings:", dt_group_widget)
 
         self.chk_disable_sound = QCheckBox("Disable Notification Sounds")
         self.chk_disable_sound.setToolTip("Mutes all audio chimes and notification sounds.")
@@ -252,11 +340,26 @@ class PreferencesDialog(QDialog):
             if idx >= 0:
                 self.combo_angle.setCurrentIndex(idx)
 
+            dt_setting = s.value("datetime_format", "Logical")
+            if dt_setting == "System":
+                self.rb_datetime_system.setChecked(True)
+            elif dt_setting == "Disabled":
+                self.rb_datetime_disabled.setChecked(True)
+            else:
+                self.rb_datetime_logical.setChecked(True)
+
     def save_and_close(self):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
             s = self.parent_app.settings
             s.setValue("disable_notification_sounds", self.chk_disable_sound.isChecked())
             s.setValue("angle_mode", self.combo_angle.currentText())
+
+            if self.rb_datetime_system.isChecked():
+                s.setValue("datetime_format", "System")
+            elif self.rb_datetime_disabled.isChecked():
+                s.setValue("datetime_format", "Disabled")
+            else:
+                s.setValue("datetime_format", "Logical")
         self.accept()
 
 
@@ -295,6 +398,7 @@ class DarkkalkPlus(QMainWindow):
         self.history_data = {"input_history": [], "calculation_history": []}
 
         self.memory_val = 0.0
+        self.has_memory = False
         self.last_ans = 0.0
 
         self.current_theme = self.settings.value("theme", "Dark")
@@ -408,6 +512,7 @@ class DarkkalkPlus(QMainWindow):
             if not text:
                 continue
             btn = QPushButton(text)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             btn.setMinimumHeight(55)
             btn.clicked.connect(lambda checked, t=text: self.on_button_click(t))
             self.grid_buttons[text] = btn
@@ -429,11 +534,48 @@ class DarkkalkPlus(QMainWindow):
             btn.setDown(True)
             QTimer.singleShot(120, lambda: btn.setDown(False))
 
+    def insert_with_auto_close(self, prefix):
+        pos = self.txt_display.cursorPosition()
+        if self.txt_display.hasSelectedText():
+            sel = self.txt_display.selectedText()
+            self.txt_display.insert(f"{prefix}{sel})")
+            self.txt_display.setCursorPosition(pos + len(prefix) + len(sel) + 1)
+        else:
+            self.txt_display.insert(f"{prefix})")
+            self.txt_display.setCursorPosition(pos + len(prefix))
+        self.txt_display.setFocus()
+
     def eventFilter(self, obj, event):
         from PyQt6.QtCore import QEvent
         if obj == self.txt_display and event.type() == QEvent.Type.KeyPress:
             k = event.key()
             t = event.text()
+
+            if not self.txt_display.text().strip() and t in ("+", "-", "*", "/", "^", "%"):
+                if t in self.grid_buttons:
+                    self.flash_button(t)
+                self.txt_display.setText(f"Ans{t}")
+                return True
+
+            if t == "(":
+                self.flash_button("(")
+                self.insert_with_auto_close("(")
+                return True
+            elif t == ")":
+                pos = self.txt_display.cursorPosition()
+                cur_text = self.txt_display.text()
+                if pos < len(cur_text) and cur_text[pos] == ")":
+                    self.flash_button(")")
+                    self.txt_display.setCursorPosition(pos + 1)
+                    return True
+            elif k == Qt.Key.Key_Backspace and not self.txt_display.hasSelectedText():
+                pos = self.txt_display.cursorPosition()
+                cur_text = self.txt_display.text()
+                if 0 < pos < len(cur_text) and cur_text[pos - 1] == "(" and cur_text[pos] == ")":
+                    self.flash_button("DEL")
+                    self.txt_display.setText(cur_text[:pos - 1] + cur_text[pos + 1:])
+                    self.txt_display.setCursorPosition(pos - 1)
+                    return True
 
             if k in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Equal) and not t == "+":
                 self.flash_button("=")
@@ -446,6 +588,26 @@ class DarkkalkPlus(QMainWindow):
 
         return super().eventFilter(obj, event)
 
+    def update_memory_indicator(self):
+        btn_ms = self.grid_buttons.get("MS")
+        btn_mc = self.grid_buttons.get("MC")
+        btn_mr = self.grid_buttons.get("MR")
+
+        if self.has_memory:
+            if btn_ms:
+                btn_ms.setStyleSheet("QPushButton { background-color: #28a745; color: #ffffff; border: 2px solid #218838; font-weight: bold; } QPushButton:hover { background-color: #218838; } QPushButton:pressed { background-color: #007acc; border: 2px solid #388bfd; color: #ffffff; }")
+            if btn_mc:
+                btn_mc.setStyleSheet("QPushButton { background-color: #dc3545; color: #ffffff; border: 2px solid #c82333; font-weight: bold; } QPushButton:hover { background-color: #c82333; } QPushButton:pressed { background-color: #007acc; border: 2px solid #388bfd; color: #ffffff; }")
+            if btn_mr:
+                btn_mr.setStyleSheet("QPushButton { background-color: #c68a00; color: #ffffff; border: 2px solid #9e6e00; font-weight: bold; } QPushButton:hover { background-color: #a87500; } QPushButton:pressed { background-color: #007acc; border: 2px solid #388bfd; color: #ffffff; }")
+        else:
+            if btn_ms:
+                btn_ms.setStyleSheet("")
+            if btn_mc:
+                btn_mc.setStyleSheet("")
+            if btn_mr:
+                btn_mr.setStyleSheet("")
+
     def on_button_click(self, text):
         if text == "=":
             self.calculate_result()
@@ -454,7 +616,16 @@ class DarkkalkPlus(QMainWindow):
         elif text == "DEL":
             self.delete_last_char()
         elif text in ("sin", "cos", "tan", "log", "sqrt"):
-            self.txt_display.insert(f"{text}(")
+            self.insert_with_auto_close(f"{text}(")
+        elif text == "(":
+            self.insert_with_auto_close("(")
+        elif text == ")":
+            pos = self.txt_display.cursorPosition()
+            cur_text = self.txt_display.text()
+            if pos < len(cur_text) and cur_text[pos] == ")":
+                self.txt_display.setCursorPosition(pos + 1)
+            else:
+                self.txt_display.insert(")")
             self.txt_display.setFocus()
         elif text == "pi":
             self.txt_display.insert("pi")
@@ -464,6 +635,9 @@ class DarkkalkPlus(QMainWindow):
             self.txt_display.setFocus()
         elif text == "MC":
             self.memory_val = 0.0
+            self.has_memory = False
+            self.update_memory_indicator()
+            self.txt_display.setFocus()
         elif text == "MR":
             self.txt_display.insert(str(int(self.memory_val) if self.memory_val.is_integer() else self.memory_val))
             self.txt_display.setFocus()
@@ -471,23 +645,71 @@ class DarkkalkPlus(QMainWindow):
             try:
                 curr = float(self.txt_display.text().strip() or "0")
                 self.memory_val = curr
+                self.has_memory = True
+                self.update_memory_indicator()
             except Exception:
                 pass
+            self.txt_display.setFocus()
         elif text == "M+":
             try:
                 curr = float(self.txt_display.text().strip() or "0")
                 self.memory_val += curr
+                self.has_memory = True
+                self.update_memory_indicator()
             except Exception:
                 pass
+            self.txt_display.setFocus()
         elif text == "M-":
             try:
                 curr = float(self.txt_display.text().strip() or "0")
                 self.memory_val -= curr
+                self.has_memory = True
+                self.update_memory_indicator()
             except Exception:
                 pass
+            self.txt_display.setFocus()
+        elif text in ("+", "-", "*", "/", "^", "%"):
+            if not self.txt_display.text().strip():
+                self.txt_display.setText(f"Ans{text}")
+            else:
+                self.txt_display.insert(text)
+            self.txt_display.setFocus()
         else:
             self.txt_display.insert(text)
             self.txt_display.setFocus()
+
+    def format_history_entry_html(self, date_str, time_str, expr, res):
+        is_err = res.startswith("Error")
+        res_color = "#f04747" if is_err else "#4a90e2"
+        res_size = "16px" if is_err else "18px"
+
+        dt_format = self.settings.value("datetime_format", "Logical")
+        header_html = ""
+        if dt_format != "Disabled":
+            display_dt = f"{date_str}<br>{time_str}"
+            if dt_format == "System":
+                try:
+                    from datetime import datetime
+                    dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
+                    q_d = QDate(dt.year, dt.month, dt.day)
+                    sys_date = QLocale.system().toString(q_d, QLocale.FormatType.ShortFormat)
+                    sys_time = dt.strftime("%I:%M:%S %p").lstrip("0") if sys.platform == "win32" else dt.strftime("%-I:%M:%S %p")
+                    display_dt = f"{sys_date}<br>{sys_time}"
+                except Exception:
+                    display_dt = f"{date_str}<br>{time_str}"
+            header_html = f'<tr>\n                <td align="left" style="color: #8e9297; font-size: 11px; line-height: 1.2;">{display_dt}</td>\n            </tr>'
+
+        return f"""
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 22px; font-family: 'Verdana', 'Segoe UI', sans-serif;">
+            {header_html}
+            <tr>
+                <td align="left" style="color: #dcddde; font-size: 14px; padding-top: 4px;">{expr}</td>
+            </tr>
+            <tr>
+                <td align="right" style="color: {res_color}; font-size: {res_size}; font-weight: bold; padding-top: 2px;">{res}</td>
+            </tr>
+        </table>
+        """
 
     def calculate_result(self):
         from datetime import datetime
@@ -518,26 +740,10 @@ class DarkkalkPlus(QMainWindow):
         self.save_history()
 
         is_err = res.startswith("Error")
-        res_color = "#f04747" if is_err else "#4a90e2"
         if not is_err:
-            try:
-                self.last_ans = float(res)
-            except Exception:
-                pass
+            self.last_ans = res
 
-        entry_html = f"""
-        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 22px; font-family: 'Verdana', 'Segoe UI', sans-serif;">
-            <tr>
-                <td align="left" style="color: #8e9297; font-size: 11px; line-height: 1.2;">{date_str}<br>{time_str}</td>
-            </tr>
-            <tr>
-                <td align="left" style="color: #dcddde; font-size: 14px; padding-top: 4px;">{expr}</td>
-            </tr>
-            <tr>
-                <td align="right" style="color: {res_color}; font-size: 18px; font-weight: bold; padding-top: 2px;">{res}</td>
-            </tr>
-        </table>
-        """
+        entry_html = self.format_history_entry_html(date_str, time_str, expr, res)
         self.txt_history.append(entry_html)
         if not is_err:
             self.txt_display.clear()
@@ -556,10 +762,26 @@ class DarkkalkPlus(QMainWindow):
             self.txt_display.setText(t[:-1])
         self.txt_display.setFocus()
 
+    def clear_input_history(self):
+        self.history_data["input_history"] = []
+        self.save_history()
+        self.txt_display.setFocus()
+
+    def clear_output(self):
+        self.txt_history.clear()
+        self.history_data["calculation_history"] = []
+        self.save_history()
+        self.txt_display.setFocus()
+
     def clear_history(self):
+        self.clear_output()
+
+    def clear_all(self):
+        self.txt_display.clear()
         self.txt_history.clear()
         self.history_data = {"input_history": [], "calculation_history": []}
         self.save_history()
+        self.txt_display.setFocus()
 
     def load_history(self):
         if os.path.exists(self.history_file):
@@ -570,7 +792,7 @@ class DarkkalkPlus(QMainWindow):
                 self.history_data = {"input_history": [], "calculation_history": []}
 
         if not isinstance(self.history_data, dict):
-            self.history_data = {"input_history": [], "calculation_history": []}
+            self.history_data = intelligence_data = {"input_history": [], "calculation_history": []}
         self.history_data.setdefault("input_history", [])
         self.history_data.setdefault("calculation_history", [])
 
@@ -580,23 +802,7 @@ class DarkkalkPlus(QMainWindow):
             time_str = item.get("time", "")
             expr = item.get("expression", "")
             res = item.get("result", "")
-            is_err = res.startswith("Error")
-            res_color = "#f04747" if is_err else "#4a90e2"
-            res_size = "16px" if is_err else "18px"
-
-            entry_html = f"""
-            <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 22px; font-family: 'Verdana', 'Segoe UI', sans-serif;">
-                <tr>
-                    <td align="left" style="color: #8e9297; font-size: 11px; line-height: 1.2;">{date_str}<br>{time_str}</td>
-                </tr>
-                <tr>
-                    <td align="left" style="color: #dcddde; font-size: 14px; padding-top: 4px;">{expr}</td>
-                </tr>
-                <tr>
-                    <td align="right" style="color: {res_color}; font-size: {res_size}; font-weight: bold; padding-top: 2px;">{res}</td>
-                </tr>
-            </table>
-            """
+            entry_html = self.format_history_entry_html(date_str, time_str, expr, res)
             self.txt_history.append(entry_html)
 
         sb = self.txt_history.verticalScrollBar()
@@ -679,12 +885,32 @@ class DarkkalkPlus(QMainWindow):
         exit_action.triggered.connect(self.close)
 
         edit_menu = menu_bar.addMenu("&Edit")
-        copy_action = edit_menu.addAction("Copy Result")
+        cut_action = edit_menu.addAction("Cut")
+        cut_action.setShortcut(QKeySequence.StandardKey.Cut)
+        cut_action.triggered.connect(lambda: self.txt_display.cut() if self.txt_display.hasSelectedText() else (QApplication.clipboard().setText(self.txt_display.text()), self.txt_display.clear()))
+
+        copy_action = edit_menu.addAction("Copy")
         copy_action.setShortcut(QKeySequence.StandardKey.Copy)
-        copy_action.triggered.connect(lambda: QApplication.clipboard().setText(self.txt_display.text()))
+        copy_action.triggered.connect(lambda: self.txt_display.copy() if self.txt_display.hasSelectedText() else QApplication.clipboard().setText(self.txt_display.text()))
+
         paste_action = edit_menu.addAction("Paste")
         paste_action.setShortcut(QKeySequence.StandardKey.Paste)
-        paste_action.triggered.connect(lambda: self.txt_display.insert(QApplication.clipboard().text()))
+        paste_action.triggered.connect(lambda: self.txt_display.paste())
+
+        edit_menu.addSeparator()
+
+        clear_menu = edit_menu.addMenu("Clear")
+        clear_input_action = clear_menu.addAction("Input")
+        clear_input_action.triggered.connect(lambda: self.clear_input_history())
+
+        clear_output_action = clear_menu.addAction("Output")
+        clear_output_action.setShortcut(QKeySequence("Ctrl+Del"))
+        clear_output_action.triggered.connect(lambda: self.clear_output())
+
+        clear_menu.addSeparator()
+
+        clear_all_action = clear_menu.addAction("All")
+        clear_all_action.triggered.connect(lambda: self.clear_all())
 
         options_menu = menu_bar.addMenu("&Options")
         themes_menu = options_menu.addMenu("&Themes")
@@ -715,7 +941,8 @@ class DarkkalkPlus(QMainWindow):
 
     def show_preferences(self):
         dialog = PreferencesDialog(self)
-        dialog.exec()
+        if dialog.exec():
+            self.load_history()
 
     def apply_theme(self, theme_name):
         app = QApplication.instance()
@@ -779,6 +1006,11 @@ class DarkkalkPlus(QMainWindow):
                 QMenu::item:selected {
                     background-color: #007acc;
                     color: #ffffff;
+                }
+                QMenu::separator {
+                    height: 1px;
+                    background-color: #4e5058;
+                    margin: 4px 8px;
                 }
                 QLabel {
                     color: #ffffff;
@@ -850,6 +1082,11 @@ class DarkkalkPlus(QMainWindow):
                     background-color: #0078d7;
                     color: #ffffff;
                 }
+                QMenu::separator {
+                    height: 1px;
+                    background-color: #b0b0b0;
+                    margin: 4px 8px;
+                }
                 QLabel {
                     color: #000000;
                 }
@@ -882,6 +1119,7 @@ class DarkkalkPlus(QMainWindow):
             """)
 
         app.setPalette(palette)
+        self.update_memory_indicator()
 
     def change_theme(self, theme_name):
         self.current_theme = theme_name
