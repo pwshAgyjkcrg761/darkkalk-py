@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: dk+.py (Darkkalk+)
-# VERSION: 2026.09.16__14.57.48
+# VERSION: 2026.09.16__20.39.18
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -73,7 +73,7 @@ import ctypes
 if hasattr(sys, "set_int_max_str_digits"):
     sys.set_int_max_str_digits(0)
 
-APP_VERSION = "2026.09.16__14.57.48"
+APP_VERSION = "2026.09.16__20.39.18"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -877,10 +877,77 @@ class DarkkalkPlus(QMainWindow):
         self.settings.setValue("theme", self.current_theme)
         event.accept()
 
+    def print_output(self):
+        try:
+            from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
+            from PyQt6.QtGui import QTextDocument, QPainter, QFont, QPen, QColor
+            from PyQt6.QtCore import QRectF, QSizeF, Qt
+
+            printer = QPrinter()
+            dialog = QPrintDialog(printer, self)
+            dialog.setWindowTitle("Print Calculation Output")
+            # Enabling PrintToFile unlocks 'Microsoft Print to PDF' and other virtual port-prompt printers in Windows
+            dialog.setOption(QPrintDialog.PrintDialogOption.PrintToFile, True)
+
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                doc = QTextDocument()
+                raw_html = self.txt_history.toHtml()
+                # Scale font sizes, margins, and line spacing by 300% (3x) for high-DPI print output
+                scaled_html = re.sub(r'(\d+)px', lambda m: f"{int(m.group(1)) * 3}px", raw_html)
+                # Ensure light theme text prints as high-contrast dark text on white pages
+                scaled_html = scaled_html.replace('#dcddde', '#111111').replace('#ffffff', '#000000')
+                doc.setHtml(scaled_html)
+
+                page_rect = printer.pageLayout().paintRectPixels(printer.resolution())
+                page_width = float(page_rect.width())
+                page_height = float(page_rect.height())
+
+                # Compact running header height (~0.28 inches)
+                header_height = max(30.0, float(int(20 * printer.resolution() / 72)))
+                content_height = page_height - header_height
+
+                doc.setPageSize(QSizeF(page_width, content_height))
+                page_count = max(1, doc.pageCount())
+
+                painter = QPainter(printer)
+                for page_idx in range(page_count):
+                    if page_idx > 0:
+                        printer.newPage()
+
+                    # Draw small, unobtrusive running header
+                    painter.setFont(QFont("Segoe UI", 8))
+                    painter.setPen(QColor("#777777"))
+                    header_rect = QRectF(0, 0, page_width, header_height * 0.7)
+                    painter.drawText(header_rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), f"Darkkalk+ v{APP_VERSION}")
+                    painter.drawText(header_rect, int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), f"Page {page_idx + 1} of {page_count}")
+
+                    # Thin subtle divider rule
+                    painter.setPen(QPen(QColor("#d0d0d0"), 1))
+                    line_y = header_height * 0.85
+                    painter.drawLine(0, int(line_y), int(page_width), int(line_y))
+
+                    # Render document content slice for this page
+                    painter.save()
+                    painter.translate(0, header_height)
+                    painter.setClipRect(QRectF(0, 0, page_width, content_height))
+                    painter.translate(0, -page_idx * content_height)
+                    doc.drawContents(painter, QRectF(0, page_idx * content_height, page_width, content_height))
+                    painter.restore()
+
+                painter.end()
+        except Exception as e:
+            self.show_alert("Print Error", f"Could not print output:\n{e}", icon_type="error")
+
     def create_menu(self):
         menu_bar = self.menuBar()
 
         file_menu = menu_bar.addMenu("&File")
+        print_action = file_menu.addAction("Print Output")
+        print_action.setShortcut(QKeySequence("Ctrl+P"))
+        print_action.triggered.connect(self.print_output)
+
+        file_menu.addSeparator()
+
         exit_action = file_menu.addAction("Exit")
         exit_action.triggered.connect(self.close)
 
