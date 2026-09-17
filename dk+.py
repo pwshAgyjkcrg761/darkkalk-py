@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: dk+.py (Darkkalk+)
-# VERSION: 2026.09.16__20.39.18
+# VERSION: 2026.09.17__06.55.05
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -73,7 +73,7 @@ import ctypes
 if hasattr(sys, "set_int_max_str_digits"):
     sys.set_int_max_str_digits(0)
 
-APP_VERSION = "2026.09.16__20.39.18"
+APP_VERSION = "2026.09.17__06.55.05"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -208,7 +208,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTabWidget, QLineEdit, QFormLayout, QTreeWidget,
                              QTreeWidgetItem, QSplitter, QHeaderView, QMenu,
                              QInputDialog, QTreeView, QAbstractItemView,
-                             QStackedWidget, QRadioButton, QButtonGroup)
+                             QStackedWidget, QRadioButton, QButtonGroup, QSlider)
 from PyQt6.QtGui import (QActionGroup, QPalette, QColor, QIcon, QPixmap, QPainter, 
                          QPen, QFileSystemModel)
 
@@ -271,8 +271,9 @@ class PreferencesDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_app = parent
+        self.initial_opacity = 100
         self.setWindowTitle("Preferences")
-        self.resize(440, 320)
+        self.resize(440, 360)
 
         script_dir = os.path.dirname(os.path.realpath(__file__))
         icon_path = os.path.join(script_dir, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
@@ -317,6 +318,23 @@ class PreferencesDialog(QDialog):
 
         calc_layout.addRow("Date && Time Settings:", dt_group_widget)
 
+        opacity_widget = QWidget()
+        opacity_layout = QHBoxLayout(opacity_widget)
+        opacity_layout.setContentsMargins(0, 0, 0, 0)
+        opacity_layout.setSpacing(8)
+
+        self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.slider_opacity.setRange(20, 100)
+        self.slider_opacity.setValue(100)
+        self.slider_opacity.valueChanged.connect(self.on_opacity_changed)
+
+        self.lbl_opacity_val = QLabel("100%")
+        self.lbl_opacity_val.setFixedWidth(40)
+
+        opacity_layout.addWidget(self.slider_opacity)
+        opacity_layout.addWidget(self.lbl_opacity_val)
+        calc_layout.addRow("Window Opacity:", opacity_widget)
+
         self.chk_disable_sound = QCheckBox("Disable Notification Sounds")
         self.chk_disable_sound.setToolTip("Mutes all audio chimes and notification sounds.")
         calc_layout.addRow("", self.chk_disable_sound)
@@ -326,10 +344,17 @@ class PreferencesDialog(QDialog):
 
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(self.save_and_close)
-        button_box.rejected.connect(self.reject)
+        button_box.rejected.connect(self.cancel_and_close)
         main_layout.addWidget(button_box)
 
         self.load_values()
+
+    def on_opacity_changed(self, val):
+        self.lbl_opacity_val.setText(f"{val}%")
+        if self.parent_app and hasattr(self.parent_app, 'apply_window_opacity'):
+            self.parent_app.apply_window_opacity(val / 100.0)
+        elif self.parent_app:
+            self.parent_app.setWindowOpacity(val / 100.0)
 
     def load_values(self):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
@@ -348,11 +373,16 @@ class PreferencesDialog(QDialog):
             else:
                 self.rb_datetime_logical.setChecked(True)
 
+            self.initial_opacity = int(s.value("window_opacity", 100))
+            self.slider_opacity.setValue(self.initial_opacity)
+            self.lbl_opacity_val.setText(f"{self.initial_opacity}%")
+
     def save_and_close(self):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
             s = self.parent_app.settings
             s.setValue("disable_notification_sounds", self.chk_disable_sound.isChecked())
             s.setValue("angle_mode", self.combo_angle.currentText())
+            s.setValue("window_opacity", self.slider_opacity.value())
 
             if self.rb_datetime_system.isChecked():
                 s.setValue("datetime_format", "System")
@@ -361,6 +391,13 @@ class PreferencesDialog(QDialog):
             else:
                 s.setValue("datetime_format", "Logical")
         self.accept()
+
+    def cancel_and_close(self):
+        if self.parent_app and hasattr(self.parent_app, 'apply_window_opacity'):
+            self.parent_app.apply_window_opacity(self.initial_opacity / 100.0)
+        elif self.parent_app:
+            self.parent_app.setWindowOpacity(self.initial_opacity / 100.0)
+        self.reject()
 
 
 
@@ -406,7 +443,48 @@ class DarkkalkPlus(QMainWindow):
         self.init_ui()
         self.load_history()
         self.apply_theme(self.current_theme)
+        self.apply_window_opacity()
         self.setup_shortcuts()
+
+    def apply_menu_opacity(self, menu, opacity=None):
+        if opacity is None:
+            opacity = self.windowOpacity()
+        menu.setWindowOpacity(opacity)
+        if sys.platform == "win32":
+            try:
+                hwnd = int(menu.winId())
+                user32 = ctypes.windll.user32
+                gwl_exstyle = -20
+                ws_ex_layered = 0x00080000
+                lwa_alpha = 0x02
+
+                get_wnd_long = getattr(user32, 'GetWindowLongPtrW', getattr(user32, 'GetWindowLongW', None))
+                set_wnd_long = getattr(user32, 'SetWindowLongPtrW', getattr(user32, 'SetWindowLongW', None))
+
+                if get_wnd_long and set_wnd_long:
+                    get_wnd_long.argtypes = [ctypes.c_void_p, ctypes.c_int]
+                    get_wnd_long.restype = ctypes.c_ssize_t
+                    set_wnd_long.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+                    set_wnd_long.restype = ctypes.c_ssize_t
+
+                    user32.SetLayeredWindowAttributes.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint8, ctypes.c_uint32]
+                    user32.SetLayeredWindowAttributes.restype = ctypes.c_bool
+
+                    cur_style = get_wnd_long(hwnd, gwl_exstyle)
+                    set_wnd_long(hwnd, gwl_exstyle, cur_style | ws_ex_layered)
+                    user32.SetLayeredWindowAttributes(hwnd, 0, int(255 * max(0.1, min(1.0, opacity))), lwa_alpha)
+            except Exception:
+                pass
+
+    def apply_window_opacity(self, opacity_override=None):
+        if opacity_override is not None:
+            val = max(0.2, min(1.0, float(opacity_override)))
+        else:
+            opacity = float(self.settings.value("window_opacity", 100)) / 100.0
+            val = max(0.2, min(1.0, opacity))
+        self.setWindowOpacity(val)
+        for menu in self.findChildren(QMenu):
+            self.apply_menu_opacity(menu, val)
 
     def init_ui(self):
         self.create_menu()
@@ -823,24 +901,93 @@ class DarkkalkPlus(QMainWindow):
             self.txt_display.setFocus()
             return
 
-        menu = QMenu(self)
-        menu.aboutToHide.connect(lambda: setattr(self, '_history_menu_closed_time', time.time()))
-
         inputs = self.history_data.get("input_history", [])
         if not inputs:
-            for _ in range(6):
-                act = menu.addAction(" ")
-                act.setEnabled(False)
+            items_to_show = ["(No history)"]
+            has_items = False
         else:
-            for item_text in reversed(inputs[-30:]):
-                act = menu.addAction(item_text)
-                act.triggered.connect(lambda checked, t=item_text: self.set_input_from_history(t))
+            items_to_show = list(reversed(inputs[-30:]))
+            has_items = True
+
+        popup = QWidget(self, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        popup.setObjectName("HistoryPopup")
+        popup.setWindowOpacity(self.windowOpacity())
+        popup.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+        layout = QVBoxLayout(popup)
+        layout.setContentsMargins(1, 1, 1, 1)
+        layout.setSpacing(0)
+
+        list_widget = QListWidget(popup)
+        list_widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        list_widget.addItems(items_to_show)
+
+        if not has_items:
+            item = list_widget.item(0)
+            if item:
+                item.setFlags(Qt.ItemFlag.NoItemFlags)
+
+        def on_item_selected(item):
+            if has_items and item:
+                self.set_input_from_history(item.text())
+            popup.close()
+
+        list_widget.itemClicked.connect(on_item_selected)
+        list_widget.itemActivated.connect(on_item_selected)
+
+        is_dark = (self.current_theme == "Dark") or (self.current_theme == "System" and QApplication.instance().palette().color(QPalette.ColorRole.Window).lightness() < 128)
+        bg_col = "#202225" if is_dark else "#ffffff"
+        text_col = "#ffffff" if is_dark else "#000000"
+        border_col = "#4e5058" if is_dark else "#b0b0b0"
+        sel_bg = "#007acc" if is_dark else "#0078d7"
+
+        popup.setStyleSheet(f"""
+            QWidget#HistoryPopup {{
+                background-color: {bg_col};
+                border: 1px solid {border_col};
+                border-radius: 4px;
+            }}
+            QListWidget {{
+                background-color: {bg_col};
+                color: {text_col};
+                border: none;
+                border-radius: 4px;
+                font-family: 'Verdana', 'Segoe UI', sans-serif;
+                font-size: 13px;
+                padding: 2px 0px;
+                outline: 0px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 5px 12px;
+                border: none;
+                outline: none;
+            }}
+            QListWidget::item:hover {{
+                background-color: {sel_bg};
+                color: #ffffff;
+            }}
+            QListWidget::item:selected {{
+                background-color: {sel_bg};
+                color: #ffffff;
+            }}
+            QListWidget::item:focus {{
+                border: none;
+                outline: none;
+                background-color: transparent;
+            }}
+        """)
+
+        layout.addWidget(list_widget)
 
         pos = self.txt_display.mapToGlobal(self.txt_display.rect().bottomLeft())
         total_width = self.txt_display.width() + self.btn_history_dropdown.width() + 6
-        menu.setMinimumWidth(total_width)
-        menu.exec(pos)
-        self.txt_display.setFocus()
+        item_count = min(max(len(items_to_show), 1), 10)
+        calc_height = max(45, item_count * 30 + 10)
+
+        popup.setGeometry(pos.x(), pos.y() + 2, total_width, calc_height)
+        popup.destroyed.connect(lambda: setattr(self, '_history_menu_closed_time', time.time()))
+        popup.show()
 
     def set_input_from_history(self, text):
         self.txt_display.setText(text)
@@ -1006,10 +1153,14 @@ class DarkkalkPlus(QMainWindow):
         about_action = help_menu.addAction("About")
         about_action.triggered.connect(self.show_about)
 
+        for m in (file_menu, edit_menu, clear_menu, options_menu, themes_menu, help_menu):
+            m.aboutToShow.connect(lambda menu=m: self.apply_menu_opacity(menu))
+
     def show_preferences(self):
         dialog = PreferencesDialog(self)
         if dialog.exec():
             self.load_history()
+            self.apply_window_opacity()
 
     def apply_theme(self, theme_name):
         app = QApplication.instance()
