@@ -3,7 +3,7 @@
 
 ---
 
-![Darkkalk+ Dark Mode Main Interface](images/darkkalk-py_dark_mode_main.png)
+![Darkkalk+ Dark Mode Main Interface](images/darkkalk+-py_dark_mode_main.png)
 
 ## Overview
 Darkkalk+™ is an algebraic scientific expression calculator written in Python and PyQt6.
