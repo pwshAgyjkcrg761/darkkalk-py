@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: dk+.py (Darkkalk+)
-# VERSION: 2026.09.18__12.26.32
+# VERSION: 2026.09.18__14.44.02
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -73,7 +73,7 @@ import ctypes
 if hasattr(sys, "set_int_max_str_digits"):
     sys.set_int_max_str_digits(0)
 
-APP_VERSION = "2026.09.18__12.26.32"
+APP_VERSION = "2026.09.18__14.44.02"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -275,6 +275,26 @@ def get_status_pixmap(status="success", size=48):
     return pixmap
 
 
+def get_app_dir():
+    """Returns the persistent directory where the script or .exe resides."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.realpath(__file__))
+
+
+def get_icon_path():
+    """Locates the application icon in the bundle temp dir or adjacent directory."""
+    search_dirs = []
+    if hasattr(sys, '_MEIPASS'):
+        search_dirs.append(sys._MEIPASS)
+    search_dirs.append(get_app_dir())
+    for base in search_dirs:
+        p = os.path.join(base, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
+        if os.path.exists(p):
+            return p
+    return ""
+
+
 class SettingsWrapper:
     def __init__(self, config_path):
         self.path = config_path
@@ -306,9 +326,8 @@ class PreferencesDialog(QDialog):
         self.setWindowTitle("Preferences")
         self.resize(440, 360)
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
-        if os.path.exists(icon_path):
+        icon_path = get_icon_path()
+        if icon_path:
             self.setWindowIcon(QIcon(icon_path))
 
         main_layout = QVBoxLayout(self)
@@ -512,13 +531,13 @@ class DarkkalkPlus(QMainWindow):
         QApplication.setCursorFlashTime(0)
         self.setWindowTitle(f"Darkkalk+ v{APP_VERSION}")
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        internal_dir = os.path.join(script_dir, "darkkalk+_internal")
+        app_dir = get_app_dir()
+        internal_dir = os.path.join(app_dir, "darkkalk+_internal")
         os.makedirs(internal_dir, exist_ok=True)
         self.config_file = os.path.join(internal_dir, "darkkalk+.config.json")
 
-        icon_path = os.path.join(internal_dir, "icons", "darkkalk+_icon.svg")
-        if os.path.exists(icon_path):
+        icon_path = get_icon_path()
+        if icon_path:
             self.setWindowIcon(QIcon(icon_path))
 
         if sys.platform == "win32":
@@ -1557,9 +1576,8 @@ h2 {{
         dialog.setWindowTitle("Manual")
         dialog.resize(650, 520)
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
-        if os.path.exists(icon_path):
+        icon_path = get_icon_path()
+        if icon_path:
             dialog.setWindowIcon(QIcon(icon_path))
 
         layout = QVBoxLayout(dialog)
@@ -1647,9 +1665,8 @@ h2 {{
         dialog.setWindowTitle("About")
         dialog.resize(480, 320)
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
-        if os.path.exists(icon_path):
+        icon_path = get_icon_path()
+        if icon_path:
             dialog.setWindowIcon(QIcon(icon_path))
 
         layout = QVBoxLayout(dialog)
@@ -1694,8 +1711,7 @@ h2 {{
         if hasattr(self, 'settings'):
             sound_disabled = self.settings.value("disable_notification_sounds", False)
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
+        icon_path = get_icon_path()
 
         msg_box = QMessageBox(self if self.isVisible() else None)
         msg_box.setWindowTitle(f"Darkkalk+ - {title}")
@@ -1704,7 +1720,7 @@ h2 {{
         if default_button:
             msg_box.setDefaultButton(default_button)
 
-        if os.path.exists(icon_path):
+        if icon_path:
             msg_box.setWindowIcon(QIcon(icon_path))
 
         if icon_type == "success":
