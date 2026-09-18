@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: dk+.py (Darkkalk+)
-# VERSION: 2026.09.18__11.27.34
+# VERSION: 2026.09.18__12.26.32
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -73,7 +73,7 @@ import ctypes
 if hasattr(sys, "set_int_max_str_digits"):
     sys.set_int_max_str_digits(0)
 
-APP_VERSION = "2026.09.18__11.27.34"
+APP_VERSION = "2026.09.18__12.26.32"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -239,7 +239,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QCheckBox, QTextBrowser, QDialogButtonBox,
                              QComboBox, QHBoxLayout, QListWidget, QTabWidget, 
                              QLineEdit, QFormLayout, QMenu, QRadioButton, 
-                             QButtonGroup, QSlider)
+                             QButtonGroup, QSlider, QFileDialog)
 from PyQt6.QtGui import (QActionGroup, QPalette, QColor, QIcon, QPixmap, 
                          QPainter, QPen)
 
@@ -673,7 +673,7 @@ class DarkkalkPlus(QMainWindow):
             # Row 1
             ("sin", 1, 0), ("cos", 1, 1), ("tan", 1, 2), ("log", 1, 3), ("pi", 1, 4),
             # Row 2
-            ("(", 2, 0), (")", 2, 1), ("%", 2, 2), ("", 2, 3), ("C", 2, 4),
+            ("(", 2, 0), (")", 2, 1), ("%", 2, 2), ("ln", 2, 3), ("C", 2, 4),
             # Row 3
             ("7", 3, 0), ("8", 3, 1), ("9", 3, 2), ("/", 3, 3), ("sqrt", 3, 4),
             # Row 4
@@ -792,7 +792,7 @@ class DarkkalkPlus(QMainWindow):
             self.clear_display()
         elif text == "DEL":
             self.delete_last_char()
-        elif text in ("sin", "cos", "tan", "log", "sqrt"):
+        elif text in ("sin", "cos", "tan", "log", "ln", "sqrt"):
             self.insert_with_auto_close(f"{text}(")
         elif text == "(":
             self.insert_with_auto_close("(")
@@ -1131,6 +1131,102 @@ class DarkkalkPlus(QMainWindow):
         self.settings.setValue("theme", self.current_theme)
         event.accept()
 
+    def save_output(self):
+        calcs = self.history_data.get("calculation_history", [])
+        if not calcs and not self.txt_history.toPlainText().strip():
+            self.show_alert("Save Output", "No calculation history to save.", icon_type="warning")
+            return
+
+        filter_types = (
+            "HTML Document (*.html *.htm);;"
+            "Markdown File (*.md);;"
+            "Plain Text (*.txt);;"
+            "All Files (*.*)"
+        )
+        last_dir = self.settings.value("last_save_dir", os.path.expanduser("~"))
+        default_path = os.path.join(last_dir, "darkkalk_output.html")
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Save Calculation Output",
+            default_path,
+            filter_types
+        )
+
+        if not file_path:
+            return
+
+        self.settings.setValue("last_save_dir", os.path.dirname(file_path))
+
+        try:
+            ext = os.path.splitext(file_path)[1].lower()
+            if not ext:
+                if "html" in selected_filter.lower():
+                    ext = ".html"
+                elif "md" in selected_filter.lower():
+                    ext = ".md"
+                else:
+                    ext = ".txt"
+                file_path += ext
+
+            content = ""
+            if ext in (".html", ".htm"):
+                is_dark = (self.current_theme == "Dark") or (self.current_theme == "System" and QApplication.instance().palette().color(QPalette.ColorRole.Window).lightness() < 128)
+                bg_col = "#202225" if is_dark else "#ffffff"
+                text_col = "#dcddde" if is_dark else "#111111"
+                h_col = "#007acc" if is_dark else "#0078d7"
+                raw_body = self.txt_history.toHtml()
+                content = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Darkkalk+ Calculation Log</title>
+<style>
+body {{
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: {bg_col};
+    color: {text_col};
+    padding: 24px;
+    margin: 0;
+}}
+h2 {{
+    color: {h_col};
+    border-bottom: 2px solid #4e5058;
+    padding-bottom: 8px;
+    margin-top: 0;
+}}
+</style>
+</head>
+<body>
+<h2>Darkkalk+ Output Log</h2>
+{raw_body}
+</body>
+</html>"""
+            elif ext == ".md":
+                lines = ["# Darkkalk+ Output Log\n\n---\n"]
+                for item in calcs:
+                    d = item.get("date", "")
+                    t = item.get("time", "")
+                    expr = item.get("expression", "")
+                    res = item.get("result", "")
+                    lines.append(f"**Timestamp:** `{d} {t}`  \n**Expression:** `{expr}`  \n**Result:** `{res}`\n\n---\n")
+                content = "\n".join(lines)
+            else:
+                lines = ["Darkkalk+ Output Log\n" + "=" * 48 + "\n"]
+                for item in calcs:
+                    d = item.get("date", "")
+                    t = item.get("time", "")
+                    expr = item.get("expression", "")
+                    res = item.get("result", "")
+                    lines.append(f"[{d} {t}]\n  Expression: {expr}\n  Result:     {res}\n")
+                content = "\n".join(lines)
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            self.show_alert("Save Output", f"Calculation log saved successfully to:\n{file_path}", icon_type="success")
+        except Exception as e:
+            self.show_alert("Save Error", f"Could not save output log:\n{e}", icon_type="error")
+
     def print_output(self):
         try:
             from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
@@ -1196,6 +1292,12 @@ class DarkkalkPlus(QMainWindow):
         menu_bar = self.menuBar()
 
         file_menu = menu_bar.addMenu("&File")
+        save_action = file_menu.addAction("Save Output")
+        save_action.setShortcut(QKeySequence("Ctrl+S"))
+        save_action.triggered.connect(self.save_output)
+
+        file_menu.addSeparator()
+
         print_action = file_menu.addAction("Print Output")
         print_action.setShortcut(QKeySequence("Ctrl+P"))
         print_action.triggered.connect(self.print_output)
@@ -1493,7 +1595,7 @@ class DarkkalkPlus(QMainWindow):
             "<h2>MATHEMATICAL FUNCTIONS &amp; CONSTANTS</h2>"
             "<ul>"
             "<li><b>Basic &amp; Advanced Arithmetic:</b> <code>+</code>, <code>-</code>, <code>*</code> (or <code>×</code>), <code>/</code> (or <code>÷</code>), <code>^</code> (exponent), <code>%</code> (percentage unary scaling, e.g., <code>50%</code> = <code>0.5</code>, <code>20%Ans</code>).</li>"
-            "<li><b>Scientific Functions:</b> Keypad functions (<code>sin</code>, <code>cos</code>, <code>tan</code>, <code>log</code>, <code>sqrt</code>) plus typeable functions (<code>ln</code> natural log, <code>abs</code> absolute value).</li>"
+            "<li><b>Scientific Functions:</b> Keypad functions (<code>sin</code>, <code>cos</code>, <code>tan</code>, <code>log</code>, <code>ln</code>, <code>sqrt</code>) plus typeable functions (<code>abs</code> absolute value).</li>"
             "<li><b>Constants:</b> <code>pi</code> (&pi; ≈ 3.14159) and <code>e</code> (Euler's number ≈ 2.71828).</li>"
             "<li><b>Trigonometric Modes:</b> Supports both <b>Degrees</b> (default) and <b>Radians</b>. Switchable via <i>Options &rarr; Preferences</i>.</li>"
             "</ul>"
@@ -1512,19 +1614,21 @@ class DarkkalkPlus(QMainWindow):
             "<li><b>MC (Memory Clear):</b> Clears the stored memory register.</li>"
             "<li><b>Ans:</b> Inserts the exact result of the previous successful calculation.</li>"
             "</ul>"
-            "<h2>HISTORY &amp; PRINTING</h2>"
+            "<h2>HISTORY, EXPORT &amp; PRINTING</h2>"
             "<ul>"
             "<li><b>Calculation Log:</b> The left panel maintains a continuous log of timestamped calculations.</li>"
             "<li><b>Past Inputs Dropdown:</b> Click the <b>▼</b> button next to the input field to quickly recall previous expressions.</li>"
-            "<li><b>Print &amp; Export:</b> Select <i>File &rarr; Print Output</i> (<code>Ctrl+P</code>) to print high-resolution logs or export directly to PDF via 'Microsoft Print to PDF'.</li>"
+            "<li><b>Save &amp; Export:</b> Select <i>File &rarr; Save Output</i> (<code>Ctrl+S</code>) to export calculation logs to HTML, Markdown (<code>.md</code>), or Plain Text (<code>.txt</code>).</li>"
+            "<li><b>Print &amp; PDF:</b> Select <i>File &rarr; Print Output</i> (<code>Ctrl+P</code>) to print high-resolution logs or export directly to PDF via 'Microsoft Print to PDF'.</li>"
             "</ul>"
             "<h2>KEYBOARD SHORTCUTS</h2>"
             "<ul>"
             "<li><b>Enter / Return / =:</b> Calculate and evaluate expression.</li>"
             "<li><b>Escape:</b> Clear the active input display.</li>"
             "<li><b>Backspace:</b> Delete character (or auto-delete empty <code>()</code> bracket pairs).</li>"
-            "<li><b>Ctrl+Del:</b> Clear output calculation history.</li>"
+            "<li><b>Ctrl+S:</b> Save calculation output log to file (HTML, Markdown, or Plain Text).</li>"
             "<li><b>Ctrl+P:</b> Open the Print / PDF export dialog.</li>"
+            "<li><b>Ctrl+Del:</b> Clear output calculation history.</li>"
             "<li><b>Ctrl+X / Ctrl+C / Ctrl+V:</b> Cut, Copy, and Paste text.</li>"
             "</ul>"
         )
