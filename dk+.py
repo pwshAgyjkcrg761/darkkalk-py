@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: dk+.py (Darkkalk+)
-# VERSION: 2026.09.17__06.55.05
+# VERSION: 2026.09.18__11.27.34
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -73,11 +73,13 @@ import ctypes
 if hasattr(sys, "set_int_max_str_digits"):
     sys.set_int_max_str_digits(0)
 
-APP_VERSION = "2026.09.17__06.55.05"
+APP_VERSION = "2026.09.18__11.27.34"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
 import math
+
+import concurrent.futures
 
 def calc_sin(x, use_degrees=True):
     rad = math.radians(x) if use_degrees else x
@@ -96,40 +98,54 @@ def calc_tan(x, use_degrees=True):
     res = math.tan(rad)
     return 0.0 if abs(res) < 1e-15 else res
 
-def evaluate_math_expression(expr_str, ans_val=0.0, use_degrees=True):
-    """Safely evaluates mathematical expressions with trig, logarithms, and powers."""
+def parse_digit_limit(val_str):
+    if not val_str or "unlimited" in str(val_str).lower() or str(val_str).strip() == "0":
+        return 0
+    cleaned = re.sub(r'[^\d]', '', str(val_str))
+    return int(cleaned) if cleaned else 50000
+
+def parse_timeout(val_str):
+    if not val_str or "disabled" in str(val_str).lower() or "unlimited" in str(val_str).lower():
+        return 0.0
+    m = re.search(r'(\d+)', str(val_str))
+    return float(m.group(1)) if m else 3.0
+
+def _evaluate_math_core(expr_str, ans_val=0.0, use_degrees=True, max_digits=50000):
     if not expr_str or not expr_str.strip():
         return ""
-    
+
+    if hasattr(sys, "set_int_max_str_digits"):
+        try:
+            sys.set_int_max_str_digits(max_digits)
+        except Exception:
+            pass
+
     clean_expr = expr_str.strip()
     clean_expr = clean_expr.replace('×', '*').replace('÷', '/').replace('^', '**')
 
-    # Auto-close unclosed parentheses
     open_count = clean_expr.count('(')
     close_count = clean_expr.count(')')
     if open_count > close_count:
         clean_expr += ')' * (open_count - close_count)
 
-    # Substitute Ans safely before implicit multiplication
     ans_repr = str(ans_val).strip() if str(ans_val).strip() else "0"
     clean_expr = re.sub(r'\bAns\b', f"({ans_repr})", clean_expr, flags=re.IGNORECASE)
 
-    # Implicit multiplication where constants precede numbers, parentheses, or functions (e.g., pi2 -> pi*2, pi(2) -> pi*(2))
+    clean_expr = re.sub(r'(\d+(\.\d+)?)%', r'(\1/100.0)', clean_expr)
+    clean_expr = re.sub(r'\)\s*%', r')*(1/100.0)', clean_expr)
+
     clean_expr = re.sub(r'\b(pi|e)\s*(\d+(\.\d+)?)', r'\1*\2', clean_expr)
     clean_expr = re.sub(r'\b(pi|e)\s*\(', r'\1*(', clean_expr)
     clean_expr = re.sub(r'\b(pi|e)\s*(sin|cos|tan|log|ln|sqrt|pi|e|abs)\b', r'\1*\2', clean_expr)
 
-    # Implicit multiplication where numbers or ')' precede constants or functions (excluding scientific notation 1e5)
     clean_expr = re.sub(r'(\d+(\.\d+)?|\))\s*(sin|cos|tan|log|ln|sqrt|pi|abs)\b', r'\1*\3', clean_expr)
     clean_expr = re.sub(r'(\))\s*e\b', r'\1*e', clean_expr)
 
-    # Implicit multiplication with parentheses (e.g., 10(5+5) -> 10*(5+5), (2)(3) -> (2)*(3), (5)2 -> (5)*2)
     clean_expr = re.sub(r'(\d+(\.\d+)?)\s*\(', r'\1*(', clean_expr)
     clean_expr = re.sub(r'\)\s*\(', r')*(', clean_expr)
     clean_expr = re.sub(r'\)\s*(\d+(\.\d+)?)', r')*\1', clean_expr)
 
     clean_expr = re.sub(r'\bpi\b', str(math.pi), clean_expr)
-    clean_expr = re.sub(r'(\d+(\.\d+)?)%', r'(\1/100.0)', clean_expr)
 
     allowed_names = {
         "sin": lambda x: calc_sin(x, use_degrees),
@@ -152,7 +168,7 @@ def evaluate_math_expression(expr_str, ans_val=0.0, use_degrees=True):
                 raise NameError(f"Function or identifier '{name}' is not allowed.")
 
         result = eval(compiled_code, {"__builtins__": {}}, allowed_names)
-        
+
         if isinstance(result, complex):
             if abs(result.imag) < 1e-15:
                 result = result.real
@@ -163,7 +179,6 @@ def evaluate_math_expression(expr_str, ans_val=0.0, use_degrees=True):
             if result == 0:
                 return "0"
 
-            # Format large integers in scientific notation
             if isinstance(result, int) and abs(result) >= 10**12:
                 try:
                     f_val = float(result)
@@ -194,23 +209,39 @@ def evaluate_math_expression(expr_str, ans_val=0.0, use_degrees=True):
     except OverflowError:
         return "Error: Number overflow (exceeds float limit ~10^308)"
     except ValueError as ve:
-        return f"Error: {ve}"
+        err_msg = str(ve)
+        if "limit" in err_msg.lower() and "digit" in err_msg.lower():
+            return "Error: Integer exceeds digit limit"
+        return f"Error: {err_msg}"
     except (SyntaxError, NameError, TypeError):
         return "Error: Invalid syntax"
     except Exception as e:
         return f"Error: {e}"
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDir, QTimer, QLocale, QDate
+def evaluate_math_expression(expr_str, ans_val=0.0, use_degrees=True, max_digits_str="50,000", timeout_str="3 Seconds"):
+    """Safely evaluates mathematical expressions with digit limits and execution timeout."""
+    max_digits = parse_digit_limit(max_digits_str)
+    timeout_sec = parse_timeout(timeout_str)
+
+    if timeout_sec <= 0:
+        return _evaluate_math_core(expr_str, ans_val, use_degrees, max_digits)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_evaluate_math_core, expr_str, ans_val, use_degrees, max_digits)
+        try:
+            return future.result(timeout=timeout_sec)
+        except concurrent.futures.TimeoutError:
+            return "Error: Calculation timed out"
+
+from PyQt6.QtCore import Qt, QTimer, QLocale, QDate
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QPushButton, QFileDialog, QLabel, QMessageBox, 
-                             QDialog, QCheckBox, QTextBrowser, QDialogButtonBox,
-                             QComboBox, QProgressBar, QHBoxLayout, QListWidget,
-                             QTabWidget, QLineEdit, QFormLayout, QTreeWidget,
-                             QTreeWidgetItem, QSplitter, QHeaderView, QMenu,
-                             QInputDialog, QTreeView, QAbstractItemView,
-                             QStackedWidget, QRadioButton, QButtonGroup, QSlider)
-from PyQt6.QtGui import (QActionGroup, QPalette, QColor, QIcon, QPixmap, QPainter, 
-                         QPen, QFileSystemModel)
+                             QPushButton, QLabel, QMessageBox, QDialog, 
+                             QCheckBox, QTextBrowser, QDialogButtonBox,
+                             QComboBox, QHBoxLayout, QListWidget, QTabWidget, 
+                             QLineEdit, QFormLayout, QMenu, QRadioButton, 
+                             QButtonGroup, QSlider)
+from PyQt6.QtGui import (QActionGroup, QPalette, QColor, QIcon, QPixmap, 
+                         QPainter, QPen)
 
 
 def get_status_pixmap(status="success", size=48):
@@ -339,7 +370,36 @@ class PreferencesDialog(QDialog):
         self.chk_disable_sound.setToolTip("Mutes all audio chimes and notification sounds.")
         calc_layout.addRow("", self.chk_disable_sound)
 
+        self.btn_restore_defaults = QPushButton("Restore Defaults")
+        self.btn_restore_defaults.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_restore_defaults.clicked.connect(self.restore_defaults)
+        calc_layout.addRow("", self.btn_restore_defaults)
+
         self.tabs.addTab(tab_calc, "General")
+
+        # Tab 2: Limits & Safety
+        tab_limits = QWidget()
+        limits_layout = QFormLayout(tab_limits)
+        limits_layout.setContentsMargins(15, 15, 15, 15)
+        limits_layout.setSpacing(12)
+
+        self.combo_digits = QComboBox()
+        self.combo_digits.addItems(["10,000", "50,000", "100,000", "500,000", "Unlimited (0)"])
+        limits_layout.addRow("Max Integer Digits:", self.combo_digits)
+
+        self.combo_timeout = QComboBox()
+        self.combo_timeout.addItems(["1 Second", "3 Seconds", "5 Seconds", "10 Seconds", "Disabled (Unlimited)"])
+        limits_layout.addRow("Calculation Timeout:", self.combo_timeout)
+
+        lbl_limits_note = QLabel(
+            "These safety limits protect the calculator from freezing and prevent excessive CPU "
+            "or memory usage when evaluating massive exponents or runaway calculations."
+        )
+        lbl_limits_note.setWordWrap(True)
+        lbl_limits_note.setStyleSheet("color: #8e9297; font-size: 12px; font-style: italic;")
+        limits_layout.addRow("", lbl_limits_note)
+
+        self.tabs.addTab(tab_limits, "Limits")
         main_layout.addWidget(self.tabs)
 
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -377,12 +437,28 @@ class PreferencesDialog(QDialog):
             self.slider_opacity.setValue(self.initial_opacity)
             self.lbl_opacity_val.setText(f"{self.initial_opacity}%")
 
+            digits_val = s.value("max_int_digits", "50,000")
+            idx_d = self.combo_digits.findText(str(digits_val))
+            if idx_d >= 0:
+                self.combo_digits.setCurrentIndex(idx_d)
+            else:
+                self.combo_digits.setCurrentIndex(1)  # Default 50,000
+
+            timeout_val = s.value("calc_timeout", "3 Seconds")
+            idx_t = self.combo_timeout.findText(str(timeout_val))
+            if idx_t >= 0:
+                self.combo_timeout.setCurrentIndex(idx_t)
+            else:
+                self.combo_timeout.setCurrentIndex(1)  # Default 3 Seconds
+
     def save_and_close(self):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
             s = self.parent_app.settings
             s.setValue("disable_notification_sounds", self.chk_disable_sound.isChecked())
             s.setValue("angle_mode", self.combo_angle.currentText())
             s.setValue("window_opacity", self.slider_opacity.value())
+            s.setValue("max_int_digits", self.combo_digits.currentText())
+            s.setValue("calc_timeout", self.combo_timeout.currentText())
 
             if self.rb_datetime_system.isChecked():
                 s.setValue("datetime_format", "System")
@@ -398,6 +474,29 @@ class PreferencesDialog(QDialog):
         elif self.parent_app:
             self.parent_app.setWindowOpacity(self.initial_opacity / 100.0)
         self.reject()
+
+    def restore_defaults(self):
+        self.chk_disable_sound.setChecked(False)
+        self.combo_angle.setCurrentIndex(0)
+        self.rb_datetime_logical.setChecked(True)
+        self.slider_opacity.setValue(100)
+        self.lbl_opacity_val.setText("100%")
+        self.combo_digits.setCurrentIndex(1)
+        self.combo_timeout.setCurrentIndex(1)
+
+        if self.parent_app and hasattr(self.parent_app, 'apply_window_opacity'):
+            self.parent_app.apply_window_opacity(1.0)
+        elif self.parent_app:
+            self.parent_app.setWindowOpacity(1.0)
+
+        if self.parent_app and hasattr(self.parent_app, 'settings'):
+            s = self.parent_app.settings
+            s.setValue("disable_notification_sounds", False)
+            s.setValue("angle_mode", "Degrees")
+            s.setValue("window_opacity", 100)
+            s.setValue("datetime_format", "Logical")
+            s.setValue("max_int_digits", "50,000")
+            s.setValue("calc_timeout", "3 Seconds")
 
 
 
@@ -796,7 +895,15 @@ class DarkkalkPlus(QMainWindow):
             return
 
         angle_mode = self.settings.value("angle_mode", "Degrees")
-        res = evaluate_math_expression(expr, ans_val=self.last_ans, use_degrees=(angle_mode == "Degrees"))
+        digits_setting = self.settings.value("max_int_digits", "50,000")
+        timeout_setting = self.settings.value("calc_timeout", "3 Seconds")
+        res = evaluate_math_expression(
+            expr, 
+            ans_val=self.last_ans, 
+            use_degrees=(angle_mode == "Degrees"),
+            max_digits_str=digits_setting,
+            timeout_str=timeout_setting
+        )
 
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
@@ -870,7 +977,7 @@ class DarkkalkPlus(QMainWindow):
                 self.history_data = {"input_history": [], "calculation_history": []}
 
         if not isinstance(self.history_data, dict):
-            self.history_data = intelligence_data = {"input_history": [], "calculation_history": []}
+            self.history_data = {"input_history": [], "calculation_history": []}
         self.history_data.setdefault("input_history", [])
         self.history_data.setdefault("calculation_history", [])
 
@@ -1346,7 +1453,7 @@ class DarkkalkPlus(QMainWindow):
     def show_manual(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Manual")
-        dialog.resize(600, 420)
+        dialog.resize(650, 520)
 
         script_dir = os.path.dirname(os.path.realpath(__file__))
         icon_path = os.path.join(script_dir, "darkkalk+_internal", "icons", "darkkalk+_icon.svg")
@@ -1360,34 +1467,66 @@ class DarkkalkPlus(QMainWindow):
         text_browser.setStyleSheet("""
             QTextBrowser {
                 font-family: 'Segoe UI', sans-serif;
-                font-size: 14px;
-                line-height: 1.6;
+                font-size: 13px;
+                line-height: 1.5;
                 color: palette(text);
                 background-color: palette(base);
                 border: none;
-                padding: 15px;
+                padding: 10px;
             }
-            h1 { color: #007acc; font-size: 20px; }
-            h2 { color: #007acc; font-size: 16px; border-bottom: 1px solid #444; padding-bottom: 4px; margin-top: 15px; }
+            h1 { color: #007acc; font-size: 18px; margin-bottom: 4px; }
+            h2 { color: #007acc; font-size: 14px; border-bottom: 1px solid #444; padding-bottom: 3px; margin-top: 14px; }
             b { color: #007acc; }
+            code { background-color: rgba(128, 128, 128, 0.15); padding: 1px 4px; border-radius: 3px; font-family: 'Consolas', monospace; }
         """)
 
         manual_text = (
-            f"<h1>Darkkalk+ v{APP_VERSION}</h1>"
-            f"<p>A scientific and arithmetic expression calculator written in Python and PyQt6 under GPLv3.</p>"
-            f"<h2>KEYPAD &amp; FUNCTIONS</h2>"
-            f"<ul>"
-            f"<li><b>Basic Operations:</b> <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>^</code> (exponent), <code>%</code> (percentage).</li>"
-            f"<li><b>Scientific Functions:</b> <code>sin</code>, <code>cos</code>, <code>tan</code>, <code>log</code> (log10), <code>sqrt</code>, <code>pi</code>.</li>"
-            f"<li><b>Memory Keys:</b> <code>MC</code> (Clear), <code>MR</code> (Recall), <code>MS</code> (Store), <code>M+</code> (Add), <code>M-</code> (Subtract).</li>"
-            f"<li><b>Ans Key:</b> Inserts the previous calculation's result into the current formula.</li>"
-            f"</ul>"
-            f"<h2>SHORTCUTS</h2>"
-            f"<ul>"
-            f"<li><b>Enter / Return:</b> Evaluate expression.</li>"
-            f"<li><b>Escape:</b> Clear expression.</li>"
-            f"<li><b>Ctrl+C / Ctrl+V:</b> Copy result and paste into expression.</li>"
-            f"</ul>"
+            f"<h1>Darkkalk+ v{APP_VERSION} User Manual</h1>"
+            "<p>A modern algebraic scientific expression calculator written in Python and PyQt6 under GPLv3.</p>"
+            "<h2>EXPRESSION ENTRY &amp; EVALUATION</h2>"
+            "<ul>"
+            "<li><b>Algebraic Evaluation:</b> Type complete formulas naturally (e.g., <code>5 + sin(30) * 2^3</code>) respecting standard operator precedence (PEMDAS/BODMAS).</li>"
+            "<li><b>Implicit Multiplication:</b> Multiplication is automatically inferred where appropriate, such as <code>2pi</code>, <code>5sin(45)</code>, <code>10(2+3)</code>, <code>(4)(5)</code>, or <code>50%200</code>.</li>"
+            "<li><b>Auto-Closing Parentheses:</b> Pressing <code>(</code> or clicking functions auto-closes with a matching <code>)</code> and positions the cursor inside.</li>"
+            "<li><b>Operator Chaining:</b> Typing an operator (<code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>^</code>, <code>%</code>) into an empty input line automatically prepends <code>Ans</code>.</li>"
+            "</ul>"
+            "<h2>MATHEMATICAL FUNCTIONS &amp; CONSTANTS</h2>"
+            "<ul>"
+            "<li><b>Basic &amp; Advanced Arithmetic:</b> <code>+</code>, <code>-</code>, <code>*</code> (or <code>×</code>), <code>/</code> (or <code>÷</code>), <code>^</code> (exponent), <code>%</code> (percentage unary scaling, e.g., <code>50%</code> = <code>0.5</code>, <code>20%Ans</code>).</li>"
+            "<li><b>Scientific Functions:</b> Keypad functions (<code>sin</code>, <code>cos</code>, <code>tan</code>, <code>log</code>, <code>sqrt</code>) plus typeable functions (<code>ln</code> natural log, <code>abs</code> absolute value).</li>"
+            "<li><b>Constants:</b> <code>pi</code> (&pi; ≈ 3.14159) and <code>e</code> (Euler's number ≈ 2.71828).</li>"
+            "<li><b>Trigonometric Modes:</b> Supports both <b>Degrees</b> (default) and <b>Radians</b>. Switchable via <i>Options &rarr; Preferences</i>.</li>"
+            "</ul>"
+            "<h2>PRECISION &amp; RANGE LIMITS</h2>"
+            "<ul>"
+            "<li><b>Arbitrary-Precision Integers:</b> Whole-number arithmetic (such as large integer powers <code>2^10000</code>, multiplication, and addition) has no fixed 64-bit limit and is bounded only by available system RAM. Massive numbers (&ge; 10<sup>12</sup>) are automatically formatted in scientific notation (e.g., <code>1.41e+1505</code>) without integer overflow.</li>"
+            "<li><b>Floating-Point &amp; Scientific Operations:</b> Decimal, fractional, trigonometric, logarithmic, and square root operations utilize standard 64-bit IEEE 754 double precision (up to &approx; 1.79 &times; 10<sup>308</sup> with 15&ndash;17 significant digits of precision).</li>"
+            "<li><b>Safety Limits &amp; Timeouts:</b> In <i>Options &rarr; Preferences &rarr; Limits</i>, you can configure the <b>Max Integer Digits</b> (default: 50,000) and <b>Calculation Timeout</b> (default: 3s) to prevent system freezes on runaway operations.</li>"
+            "<li><b>Restore Defaults:</b> Reset all settings to factory defaults at any time via the <i>Restore Defaults</i> button in <i>Options &rarr; Preferences</i>.</li>"
+            "</ul>"
+            "<h2>MEMORY &amp; ANS OPERATIONS</h2>"
+            "<ul>"
+            "<li><b>MS (Memory Store):</b> Stores the current display value into memory. Active memory illuminates the memory buttons.</li>"
+            "<li><b>MR (Memory Recall):</b> Inserts the stored memory value into the input expression.</li>"
+            "<li><b>M+ / M-:</b> Adds or subtracts the display value to/from memory.</li>"
+            "<li><b>MC (Memory Clear):</b> Clears the stored memory register.</li>"
+            "<li><b>Ans:</b> Inserts the exact result of the previous successful calculation.</li>"
+            "</ul>"
+            "<h2>HISTORY &amp; PRINTING</h2>"
+            "<ul>"
+            "<li><b>Calculation Log:</b> The left panel maintains a continuous log of timestamped calculations.</li>"
+            "<li><b>Past Inputs Dropdown:</b> Click the <b>▼</b> button next to the input field to quickly recall previous expressions.</li>"
+            "<li><b>Print &amp; Export:</b> Select <i>File &rarr; Print Output</i> (<code>Ctrl+P</code>) to print high-resolution logs or export directly to PDF via 'Microsoft Print to PDF'.</li>"
+            "</ul>"
+            "<h2>KEYBOARD SHORTCUTS</h2>"
+            "<ul>"
+            "<li><b>Enter / Return / =:</b> Calculate and evaluate expression.</li>"
+            "<li><b>Escape:</b> Clear the active input display.</li>"
+            "<li><b>Backspace:</b> Delete character (or auto-delete empty <code>()</code> bracket pairs).</li>"
+            "<li><b>Ctrl+Del:</b> Clear output calculation history.</li>"
+            "<li><b>Ctrl+P:</b> Open the Print / PDF export dialog.</li>"
+            "<li><b>Ctrl+X / Ctrl+C / Ctrl+V:</b> Cut, Copy, and Paste text.</li>"
+            "</ul>"
         )
 
         text_browser.setHtml(manual_text)
@@ -1423,17 +1562,19 @@ class DarkkalkPlus(QMainWindow):
             }
             h1 { color: #007acc; font-size: 18px; }
             b { color: #007acc; }
+            a { color: #007acc; text-decoration: none; }
         """)
 
         about_text = (
-            f"<h1>Darkkalk+ v{APP_VERSION}</h1>"
-            "<p>Copyright (C) 2026 <b>pwshAgyjkcrg761</b><br>"
+            "<style>a { color: #007acc; text-decoration: none; }</style>"
+            f"<h1><a href=\"https://git.disroot.org/pwshAgyjkcrg761/darkkalk-py\">Darkkalk+ v{APP_VERSION}</a></h1>"
+            "<p>Copyright (C) 2026 <b><a href=\"https://git.disroot.org/pwshAgyjkcrg761?tab=repositories\">pwshAgyjkcrg761</a></b><br>"
             "Licensed under <b>GPLv3</b></p>"
             "<p>Official License: <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">gnu.org/licenses/gpl-3.0.html</a></p>"
             "<hr>"
             "<p><b>Icon Credits:</b><br>"
             "'<a href=\"https://www.svgrepo.com/svg/253926/calculator\">Calculator SVG Vector</a>' by <a href=\"https://www.svgrepo.com/\">SVGRepo</a>.<br>"
-            "Used under <a href=\"https://creativecommons.org/publicdomain/zero/1.0/\">CC0 License</a>. Modified by pwshAgyjkcrg761.</p>"
+            "Used under <a href=\"https://creativecommons.org/publicdomain/zero/1.0/\">CC0 License</a>. Modified by <a href=\"https://git.disroot.org/pwshAgyjkcrg761?tab=repositories\">pwshAgyjkcrg761</a>.</p>"
         )
         text_browser.setHtml(about_text)
         layout.addWidget(text_browser)
