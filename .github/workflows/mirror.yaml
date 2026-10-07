@@ -30,7 +30,7 @@ jobs:
           git tag -l | xargs -r git tag -d
 
           # 2. Fetch all branches and tags from Disroot
-          git remote add disroot https://git.disroot.org/pwshAgyjkcrg761/darkkalk-py.git
+          git remote add disroot https://${DISROOT_TOKEN}@git.disroot.org/pwshAgyjkcrg761/darkkalk-py.git
           git fetch disroot --tags --force
 
           # 3. Align main branch
